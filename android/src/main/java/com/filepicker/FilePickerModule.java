@@ -1,21 +1,34 @@
 package com.filepicker;
 
+import android.Manifest;
 import android.annotation.TargetApi;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.ActivityNotFoundException;
+import android.content.ComponentName;
 import android.content.ContentUris;
 import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.database.Cursor;
+import android.graphics.Color;
+import android.graphics.drawable.Drawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Environment;
 import android.provider.DocumentsContract;
 import android.provider.MediaStore;
+import android.support.v4.app.ActivityCompat;
 import android.util.Log;
+import android.view.MotionEvent;
+import android.view.View;
+import android.view.ViewGroup;
 import android.widget.ArrayAdapter;
+import android.widget.ImageView;
+import android.widget.RelativeLayout;
+import android.widget.TextView;
 
 import com.facebook.react.bridge.ActivityEventListener;
 import com.facebook.react.bridge.Arguments;
@@ -25,10 +38,17 @@ import com.facebook.react.bridge.ReactContextBaseJavaModule;
 import com.facebook.react.bridge.ReactMethod;
 import com.facebook.react.bridge.ReadableMap;
 import com.facebook.react.bridge.ReadableMapKeySetIterator;
+import com.facebook.react.bridge.ReadableType;
 import com.facebook.react.bridge.WritableMap;
 
 import java.util.ArrayList;
 import java.util.List;
+
+import java.io.InputStream;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.BufferedOutputStream;
+import java.io.OutputStream;
 
 public class FilePickerModule extends ReactContextBaseJavaModule implements ActivityEventListener {
 
@@ -47,6 +67,24 @@ public class FilePickerModule extends ReactContextBaseJavaModule implements Acti
         mReactContext = reactContext;
     }
 
+    private boolean permissionsCheck(Activity activity) {
+        int readPermission = ActivityCompat.checkSelfPermission(activity, Manifest.permission.READ_EXTERNAL_STORAGE);
+        int writePermission = ActivityCompat.checkSelfPermission(activity, Manifest.permission.WRITE_EXTERNAL_STORAGE);
+        int cameraPermission = ActivityCompat.checkSelfPermission(activity, Manifest.permission.CAMERA);
+        if (writePermission != PackageManager.PERMISSION_GRANTED
+                || cameraPermission != PackageManager.PERMISSION_GRANTED
+                || readPermission != PackageManager.PERMISSION_GRANTED) {
+            String[] PERMISSIONS = {
+                    Manifest.permission.READ_EXTERNAL_STORAGE,
+                    Manifest.permission.WRITE_EXTERNAL_STORAGE,
+                    Manifest.permission.CAMERA
+            };
+            ActivityCompat.requestPermissions(activity, PERMISSIONS, 1);
+            return false;
+        }
+        return true;
+    }
+
     @Override
     public String getName() {
         return "FilePickerManager";
@@ -54,21 +92,31 @@ public class FilePickerModule extends ReactContextBaseJavaModule implements Acti
 
     @ReactMethod
     public void showFilePicker(final ReadableMap options, final Callback callback) {
+        boolean showCustomDialog = false;
+        if(options != null && options.hasKey("showCustomDialog")  && options.getType("showCustomDialog") == ReadableType.Boolean){
+            showCustomDialog = options.getBoolean("showCustomDialog");
+        }
         Activity currentActivity = getCurrentActivity();
         response = Arguments.createMap();
+
+        if (!permissionsCheck(currentActivity)) {
+            response.putBoolean("didRequestPermission", true);
+            response.putString("option", "launchFileChooser");
+            callback.invoke(response);
+            return;
+        }
 
         if (currentActivity == null) {
             response.putString("error", "can't find current Activity");
             callback.invoke(response);
             return;
         }
-		
-		launchFileChooser(callback);
+
+        _launchFileChooser(callback, showCustomDialog);
     }
 
-    // NOTE: Currently not reentrant / doesn't support concurrent requests
-    @ReactMethod
-    public void launchFileChooser(final Callback callback) {
+    private void _launchFileChooser(final Callback callback, boolean showCustomDialog){
+
         int requestCode;
         Intent libraryIntent;
         response = Arguments.createMap();
@@ -93,37 +141,190 @@ public class FilePickerModule extends ReactContextBaseJavaModule implements Acti
 
         mCallback = callback;
 
-        try {
-            currentActivity.startActivityForResult(Intent.createChooser(libraryIntent, "Select file to Upload"), requestCode);
-        } catch (ActivityNotFoundException e) {
-            e.printStackTrace();
+        if(showCustomDialog){
+            openMediaSelector(getCurrentActivity());
+        }else{
+            try {
+                currentActivity.startActivityForResult(Intent.createChooser(libraryIntent, "Select file to Upload"), requestCode);
+            } catch (ActivityNotFoundException e) {
+                e.printStackTrace();
+            }
         }
+    }
+
+    // NOTE: Currently not reentrant / doesn't support concurrent requests
+    @ReactMethod
+    public void launchFileChooser(final Callback callback) {
+        this._launchFileChooser(callback, false);
+    }
+
+    /**
+     * Detect the available intent and open a new dialog.
+     * @param context
+     */
+    public void openMediaSelector(Activity context){
+
+        Intent camIntent = new Intent("android.media.action.IMAGE_CAPTURE");
+        Intent gallIntent=new Intent(Intent.ACTION_GET_CONTENT);
+        gallIntent.setType("*/*");
+        gallIntent.addCategory(Intent.CATEGORY_OPENABLE);
+
+        // look for available intents
+        List<ResolveInfo> info=new ArrayList<ResolveInfo>();
+        List<Intent> yourIntentsList = new ArrayList<Intent>();
+        PackageManager packageManager = context.getPackageManager();
+        List<ResolveInfo> listCam = packageManager.queryIntentActivities(camIntent, 0);
+        for (ResolveInfo res : listCam) {
+            final Intent finalIntent = new Intent(camIntent);
+            finalIntent.setComponent(new ComponentName(res.activityInfo.packageName, res.activityInfo.name));
+            yourIntentsList.add(finalIntent);
+            info.add(res);
+        }
+        List<ResolveInfo> listGall = packageManager.queryIntentActivities(gallIntent, 0);
+        for (ResolveInfo res : listGall) {
+            final Intent finalIntent = new Intent(gallIntent);
+            finalIntent.setComponent(new ComponentName(res.activityInfo.packageName, res.activityInfo.name));
+            yourIntentsList.add(finalIntent);
+            info.add(res);
+        }
+        List<ActionElement> actions = new ArrayList<ActionElement>();
+        actions.add(new ActionElement("Send vCard", context.getResources().getDrawable(R.drawable.superphone) ));
+        for (ResolveInfo res : info) {
+            actions.add(new ActionElement( res.loadLabel(context.getPackageManager()).toString() ,  res.loadIcon(context.getPackageManager())));
+        }
+
+        // show available intents
+        openDialog(context,yourIntentsList,actions);
+    }
+
+    private class ActionElement{
+        private String label;
+        private Drawable imageResource;
+        private ActionElement(String label, Drawable imageResource){
+            this.label = label;
+            this.imageResource = imageResource;
+        }
+
+        public Drawable getImageDrawable() {
+            return imageResource;
+        }
+
+        public void setImageResource(Drawable imageResource) {
+            this.imageResource = imageResource;
+        }
+
+        public String getLabel() {
+            return label;
+        }
+
+        public void setLabel(String label) {
+            this.label = label;
+        }
+    }
+
+
+    /**
+     * Open a new dialog with the detected items.
+     *
+     * @param context
+     * @param intents
+     * @param activitiesInfo
+     */
+    private  void openDialog(final Activity context, final List<Intent> intents,
+                                   List<ActionElement> activitiesInfo) {
+        AlertDialog.Builder dialog = new AlertDialog.Builder(context, AlertDialog.THEME_HOLO_LIGHT);
+        dialog.setTitle("Select an action");
+        dialog.setAdapter(buildAdapter(context, activitiesInfo),
+                new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int id) {
+                        //id 0 is vCard
+                        if(id == 0){
+                            response.putString("type", "Send vCard");
+                            mCallback.invoke(response);
+                        }else{
+                            Intent intent = intents.get(id-1);
+                            context.startActivityForResult(intent,REQUEST_LAUNCH_FILE_CHOOSER);
+                        }
+                        //currentActivity.startActivityForResult(Intent.createChooser(libraryIntent, "Select file to Upload"), requestCode);
+
+                    }
+                });
+
+        dialog.setNeutralButton("CANCEL",
+                new android.content.DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        dialog.dismiss();
+                    }
+                });
+        dialog.show();
+    }
+
+
+    /**
+     * Build the list of items to show using the intent_listview_row layout.
+     * @param context
+     * @param activitiesInfo
+     * @return
+     */
+    private static ArrayAdapter<ActionElement> buildAdapter(final Context context, final List<ActionElement> activitiesInfo) {
+        return new ArrayAdapter<ActionElement>(context, R.layout.intent_listview_row,R.id.title,activitiesInfo){
+            @Override
+            public View getView(final int position, View convertView, ViewGroup parent) {
+                final View view = super.getView(position, convertView, parent);
+                ActionElement res=activitiesInfo.get(position);
+                ImageView image=(ImageView) view.findViewById(R.id.icon);
+                image.setImageDrawable(res.getImageDrawable());
+                TextView textview=(TextView)view.findViewById(R.id.title);
+                textview.setText(res.getLabel());
+                return view;
+            }
+        };
+    }
+
+
+    // R.N > 33
+    public void onActivityResult(final Activity activity, final int requestCode, final int resultCode, final Intent data) {
+      onActivityResult(requestCode, resultCode, data);
     }
 
     public void onActivityResult(final int requestCode, final int resultCode, final Intent data) {
 
-        // user cancel
-        if (resultCode != Activity.RESULT_OK) {
-            response.putBoolean("didCancel", true);
-            mCallback.invoke(response);
-            return;
-        }
+      //robustness code
+      if (mCallback == null || requestCode != REQUEST_LAUNCH_FILE_CHOOSER) {
+        return;
+      }
+      // user cancel
+      if (resultCode != Activity.RESULT_OK) {
+          response.putBoolean("didCancel", true);
+          mCallback.invoke(response);
+          return;
+      }
 
-        Activity currentActivity = getCurrentActivity();
+      Activity currentActivity = getCurrentActivity();
 
-        Uri uri;
+      Uri uri = data.getData();
+      response.putString("uri", data.getData().toString());
+      String path = null;
+      path = getPath(currentActivity, uri);
+      if (path != null) {
+          response.putString("path", path);
+      }else{
+          path = getFileFromUri(currentActivity, uri);
+          if(!path.equals("error")){
+              response.putString("path", path);
+          }
+      }
 
-        if (requestCode == REQUEST_LAUNCH_FILE_CHOOSER) {
-            uri = data.getData();
-            response.putString("uri", data.getData().toString());
-            String path = null;
-            path = getPath(currentActivity, uri);
-            if (path != null) {
-                response.putString("path", path);
-            }
-            mCallback.invoke(response);
-        }
+      response.putString("type", currentActivity.getContentResolver().getType(uri));
+      response.putString("fileName", getFileNameFromUri(currentActivity, uri));
+
+      mCallback.invoke(response);
     }
+
+
+
 
     @TargetApi(Build.VERSION_CODES.KITKAT)
     public static String getPath(final Context context, final Uri uri) {
@@ -248,5 +449,59 @@ public class FilePickerModule extends ReactContextBaseJavaModule implements Acti
         }
         return null;
     }
+
+    private String getFileFromUri(Activity activity, Uri uri){
+      //If it can't get path of file, file is saved in cache, and obtain path from there
+      try {
+        String filePath = activity.getCacheDir().toString();
+        String fileName = getFileNameFromUri(activity, uri);
+        String path = filePath + "/" + fileName;
+        if(!fileName.equals("error") && saveFileOnCache(path, activity, uri)){
+          return path;
+        }else{
+          return "error";
+        }
+      } catch (Exception e) {
+        //Log.d("FilePickerModule", "Error getFileFromStream");
+        return "error";
+      }
+    }
+
+    private String getFileNameFromUri(Activity activity, Uri uri){
+      Cursor cursor = activity.getContentResolver().query(uri, null, null, null, null);
+      if (cursor != null && cursor.moveToFirst()) {
+          final int column_index = cursor.getColumnIndexOrThrow("_display_name");
+          return cursor.getString(column_index);
+      }else{
+        return "error";
+      }
+    }
+
+    private boolean saveFileOnCache(String path, Activity activity, Uri uri){
+      //Log.d("FilePickerModule", "saveFileOnCache path: "+path);
+      try {
+        InputStream is = activity.getContentResolver().openInputStream(uri);
+        OutputStream stream = new BufferedOutputStream(new FileOutputStream(path));
+        int bufferSize = 1024;
+        byte[] buffer = new byte[bufferSize];
+        int len = 0;
+        while ((len = is.read(buffer)) != -1) {
+            stream.write(buffer, 0, len);
+        }
+
+        if(stream!=null)
+            stream.close();
+
+        //Log.d("FilePickerModule", "saveFileOnCache done!");
+        return true;
+
+      } catch (Exception e) {
+        //Log.d("FilePickerModule", "saveFileOnCache error");
+        return false;
+      }
+    }
+
+    // Required for RN 0.30+ modules than implement ActivityEventListener
+    public void onNewIntent(Intent intent) { }
 
 }
