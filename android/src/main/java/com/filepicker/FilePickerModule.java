@@ -7,16 +7,19 @@ import android.app.AlertDialog;
 import android.content.ActivityNotFoundException;
 import android.content.ComponentName;
 import android.content.ContentUris;
+import android.content.ContentValues;
 import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.database.Cursor;
+import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.drawable.Drawable;
 import android.net.Uri;
 import android.os.Build;
+import android.os.Bundle;
 import android.os.Environment;
 import android.provider.DocumentsContract;
 import android.provider.MediaStore;
@@ -41,11 +44,13 @@ import com.facebook.react.bridge.ReadableMapKeySetIterator;
 import com.facebook.react.bridge.ReadableType;
 import com.facebook.react.bridge.WritableMap;
 
+import java.io.File;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.List;
 
 import java.io.InputStream;
-import java.io.File;
 import java.io.FileOutputStream;
 import java.io.BufferedOutputStream;
 import java.io.OutputStream;
@@ -164,10 +169,12 @@ public class FilePickerModule extends ReactContextBaseJavaModule implements Acti
      */
     public void openMediaSelector(Activity context){
 
+
         Intent camIntent = new Intent("android.media.action.IMAGE_CAPTURE");
         Intent gallIntent=new Intent(Intent.ACTION_GET_CONTENT);
         gallIntent.setType("*/*");
         gallIntent.addCategory(Intent.CATEGORY_OPENABLE);
+
 
         // look for available intents
         List<ResolveInfo> info=new ArrayList<ResolveInfo>();
@@ -247,7 +254,6 @@ public class FilePickerModule extends ReactContextBaseJavaModule implements Acti
                             context.startActivityForResult(intent,REQUEST_LAUNCH_FILE_CHOOSER);
                         }
                         //currentActivity.startActivityForResult(Intent.createChooser(libraryIntent, "Select file to Upload"), requestCode);
-
                     }
                 });
 
@@ -304,23 +310,63 @@ public class FilePickerModule extends ReactContextBaseJavaModule implements Acti
 
       Activity currentActivity = getCurrentActivity();
 
-      Uri uri = data.getData();
-      response.putString("uri", data.getData().toString());
-      String path = null;
-      path = getPath(currentActivity, uri);
-      if (path != null) {
-          response.putString("path", path);
-      }else{
-          path = getFileFromUri(currentActivity, uri);
-          if(!path.equals("error")){
-              response.putString("path", path);
-          }
-      }
 
-      response.putString("type", currentActivity.getContentResolver().getType(uri));
-      response.putString("fileName", getFileNameFromUri(currentActivity, uri));
+       if(data.getData() == null) {
 
-      mCallback.invoke(response);
+           try {
+               Bundle extras = data.getExtras();
+               // Assume block needs to be inside a Try/Catch block.
+               String cachePath = mReactContext.getCacheDir().toString();
+               OutputStream fOut = null;
+               String timeStamp = new SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date());
+               File file = new File(cachePath, timeStamp + ".jpg"); // the File to save , append increasing numeric counter to prevent files from getting overwritten.
+               fOut = new FileOutputStream(file);
+
+               Bitmap pictureBitmap = (Bitmap) extras.get("data");
+               pictureBitmap.compress(Bitmap.CompressFormat.JPEG, 85, fOut); // saving the Bitmap to a file compressed as a JPEG with 85% compression rate
+               fOut.flush(); // Not really required
+               fOut.close(); // do not forget to close the stream
+
+               Uri uri = Uri.fromFile(file);
+               response.putString("uri", uri.toString());
+               String path = null;
+               path = getPath(currentActivity, uri);
+               if (path != null) {
+                   response.putString("path", path);
+               } else {
+                   path = getFileFromUri(currentActivity, uri);
+                   if (!path.equals("error")) {
+                       response.putString("path", path);
+                   }
+               }
+               response.putString("type", "image/jpeg" );
+               response.putString("fileName", uri.getLastPathSegment() );
+
+               mCallback.invoke(response);
+
+           } catch (Exception e) {
+               response.putBoolean("didCancel", true);
+               mCallback.invoke(response);
+           }
+       }else{
+           Uri uri = data.getData();
+           response.putString("uri", data.getData().toString());
+           String path = null;
+           path = getPath(currentActivity, uri);
+           if (path != null) {
+               response.putString("path", path);
+           } else {
+               path = getFileFromUri(currentActivity, uri);
+               if (!path.equals("error")) {
+                   response.putString("path", path);
+               }
+           }
+
+           response.putString("type", currentActivity.getContentResolver().getType(uri));
+           response.putString("fileName", getFileNameFromUri(currentActivity, uri));
+
+           mCallback.invoke(response);
+       }
     }
 
 
