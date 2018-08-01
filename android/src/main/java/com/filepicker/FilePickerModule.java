@@ -380,6 +380,12 @@ public class FilePickerModule extends ReactContextBaseJavaModule implements Acti
         // DocumentProvider
         if (isKitKat && DocumentsContract.isDocumentUri(context, uri)) {
 
+            //If has Raw Path
+            String idRaw = DocumentsContract.getDocumentId(uri);
+            Uri uriRaw = Uri.parse(idRaw);
+            if("raw".equalsIgnoreCase(uriRaw.getScheme())){
+                return uriRaw.getPath();
+            }
             // ExternalStorageProvider
             if (isExternalStorageDocument(uri)) {
                 final String docId = DocumentsContract.getDocumentId(uri);
